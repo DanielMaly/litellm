@@ -9097,6 +9097,12 @@ def stream_chunk_builder(
             )
             setattr(response, "usage", usage)
 
+            _provider_response_cost = getattr(usage, "cost", None)
+            if _provider_response_cost is not None:
+                response._hidden_params.setdefault("additional_headers", {})[
+                    "llm_provider-x-litellm-response-cost"
+                ] = _provider_response_cost
+
             # Propagate provider_specific_fields from chunk hidden params when present.
             for chunk in reversed(chunks):
                 if isinstance(chunk, dict):
@@ -9274,6 +9280,12 @@ def stream_chunk_builder(
         )
 
         setattr(response, "usage", usage)
+
+        _provider_response_cost = getattr(usage, "cost", None)
+        if _provider_response_cost is not None:
+            response._hidden_params.setdefault("additional_headers", {})[
+                "llm_provider-x-litellm-response-cost"
+            ] = _provider_response_cost
 
         # Propagate provider_specific_fields from the last chunk (contains provider
         # metadata like traffic_type set during streaming)

@@ -931,6 +931,11 @@ class ChunkProcessor:
                         server_tool_use = usage_chunk.server_tool_use
                     else:
                         server_tool_use = ServerToolUse.model_validate(usage_chunk.server_tool_use)
+                _cost = getattr(usage_chunk, "cost", None)
+                if _cost is None and isinstance(usage_chunk, dict):
+                    _cost = usage_chunk.get("cost")
+                if _cost is not None:
+                    cost = _cost
                 if usage_chunk_dict["prompt_tokens_details"] is not None:
                     chunk_web_search_requests: int | None = getattr(
                         usage_chunk_dict["prompt_tokens_details"],
