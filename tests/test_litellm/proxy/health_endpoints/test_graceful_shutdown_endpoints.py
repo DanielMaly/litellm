@@ -43,6 +43,17 @@ def enable_drain(monkeypatch):
     )
 
 
+@pytest.fixture
+def enable_drain_with_token(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"enable_drain_endpoint": True, "drain_endpoint_token": "secret-123"},
+    )
+
+
 def test_drain_disabled_by_default_returns_404_with_no_side_effect(client, monkeypatch):
     from litellm.proxy import proxy_server
 
@@ -52,7 +63,20 @@ def test_drain_disabled_by_default_returns_404_with_no_side_effect(client, monke
     assert GracefulShutdownManager.is_shutting_down() is False
 
 
-def test_drain_when_enabled_sets_shutting_down_and_returns_drained(
+def test_drain_disabled_ignores_token_header(client, monkeypatch):
+    """A token alone must not bypass the enable flag; otherwise enabling the
+    token side-channel would silently enable the endpoint."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"drain_endpoint_token": "secret-123"}
+    )
+    resp = client.get("/health/drain", headers={"X-Drain-Token": "secret-123"})
+    assert resp.status_code == 404
+    assert GracefulShutdownManager.is_shutting_down() is False
+
+
+def test_drain_when_enabled_without_token_sets_shutting_down_and_returns_drained(
     client, enable_drain
 ):
     resp = client.get("/health/drain")
@@ -61,6 +85,54 @@ def test_drain_when_enabled_sets_shutting_down_and_returns_drained(
     assert body["status"] == "drained"
     assert body["drained_requests"] == 0
     assert GracefulShutdownManager.is_shutting_down() is True
+
+
+def test_drain_with_token_configured_rejects_missing_header(
+    client, enable_drain_with_token
+):
+    resp = client.get("/health/drain")
+    assert resp.status_code == 401
+    assert GracefulShutdownManager.is_shutting_down() is False
+
+
+def test_drain_with_token_configured_rejects_wrong_header(
+    client, enable_drain_with_token
+):
+    resp = client.get("/health/drain", headers={"X-Drain-Token": "wrong-value"})
+    assert resp.status_code == 401
+    assert GracefulShutdownManager.is_shutting_down() is False
+
+
+def test_drain_with_token_configured_accepts_correct_header(
+    client, enable_drain_with_token
+):
+    resp = client.get("/health/drain", headers={"X-Drain-Token": "secret-123"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "drained"
+    assert GracefulShutdownManager.is_shutting_down() is True
+
+
+def test_drain_with_token_from_env_var(client, enable_drain, monkeypatch):
+    monkeypatch.setenv("DRAIN_ENDPOINT_TOKEN", "env-token")
+    resp = client.get("/health/drain")
+    assert resp.status_code == 401
+    resp = client.get("/health/drain", headers={"X-Drain-Token": "env-token"})
+    assert resp.status_code == 200
+
+
+def test_drain_general_settings_token_overrides_env_var(client, monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"enable_drain_endpoint": True, "drain_endpoint_token": "config-token"},
+    )
+    monkeypatch.setenv("DRAIN_ENDPOINT_TOKEN", "env-token")
+    resp = client.get("/health/drain", headers={"X-Drain-Token": "env-token"})
+    assert resp.status_code == 401
+    resp = client.get("/health/drain", headers={"X-Drain-Token": "config-token"})
+    assert resp.status_code == 200
 
 
 def test_readiness_returns_503_shutting_down_during_drain(client):

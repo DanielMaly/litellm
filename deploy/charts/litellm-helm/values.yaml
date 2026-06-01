@@ -294,16 +294,22 @@ db:
 # seconds above GRACEFUL_SHUTDOWN_TIMEOUT to leave room for teardown before
 # SIGKILL.
 #
-# /health/drain is unauthenticated and off by default; enable it with
-# general_settings.enable_drain_endpoint: true only when the health port is
-# reachable solely from inside the cluster, since any caller that reaches it
-# can take the pod out of rotation.
+# /health/drain is off by default; enable it with
+# general_settings.enable_drain_endpoint: true. The kubelet calls preStop
+# hooks without proxy credentials, so when the health port is reachable from
+# other pods (the common case) also set
+# general_settings.drain_endpoint_token (or the DRAIN_ENDPOINT_TOKEN env
+# var) and send the same value on the X-Drain-Token header from the hook.
+# Calls missing/wrong the token get a 401 and have no side effect.
 # Example:
 # lifecycle:
 #   preStop:
 #     httpGet:
 #       path: /health/drain
 #       port: 4000
+#       httpHeaders:
+#         - name: X-Drain-Token
+#           value: <same value as drain_endpoint_token>
 lifecycle: {}
 
 # Settings for Bitnami postgresql chart (if db.deployStandalone is true, ignored
