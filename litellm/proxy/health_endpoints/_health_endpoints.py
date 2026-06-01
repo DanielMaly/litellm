@@ -39,6 +39,7 @@ from litellm.proxy.health_check import (
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
+from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
 #### Health ENDPOINTS ####
 
@@ -1551,6 +1552,12 @@ def _allow_public_health_readiness_details() -> bool:
     return general_settings.get("allow_public_health_readiness_details") is True
 
 
+def _drain_endpoint_enabled() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("enable_drain_endpoint") is True
+
+
 async def _resolve_public_readiness_db(response: Response) -> str:
     """
     Return the db status string for the public probe and flip the response to
@@ -1580,6 +1587,10 @@ async def health_readiness(response: Response):
     credential. Admins can opt into the legacy detailed payload with
     general_settings.allow_public_health_readiness_details.
     """
+    if GracefulShutdownManager.is_shutting_down():
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "shutting_down"}
+
     if _allow_public_health_readiness_details():
         return await _get_health_readiness_details(response=response)
 
@@ -1617,6 +1628,44 @@ async def health_backlog():
 
 
 @router.get(
+    "/health/drain",
+    tags=["health"],
+)
+async def health_drain():
+    """
+    Graceful-drain probe for Kubernetes ``preStop`` hooks.
+
+    Disabled by default and returns 404 unless ``general_settings`` sets
+    ``enable_drain_endpoint: true``. It is unauthenticated (the kubelet calls
+    preStop hooks without proxy credentials) and flips a process-wide
+    shutting-down flag, so it stays off until an operator opts in for an
+    internally reachable health port.
+
+    When enabled, it marks the worker as shutting down (so /health/readiness
+    and /health/liveliness immediately start returning 503, removing the pod
+    from
+    service) and blocks until the in-flight request counter drains to zero or
+    ``GRACEFUL_SHUTDOWN_TIMEOUT`` elapses. Unlike a fixed ``sleep``, this
+    returns as soon as real in-flight work is done.
+
+    Wire it up as:
+
+    ```yaml
+    lifecycle:
+      preStop:
+        httpGet:
+          path: /health/drain
+          port: 4000
+    ```
+    """
+    if not _drain_endpoint_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    GracefulShutdownManager.start_shutdown()
+    drained = await GracefulShutdownManager.wait_for_drain(exclude_self=True)
+    return {"status": "drained", "drained_requests": drained}
+
+
+@router.get(
     "/health/liveliness",  # Historical LiteLLM name; doesn't match k8s terminology but kept for backwards compatibility
     tags=["health"],
 )
@@ -1624,10 +1673,16 @@ async def health_backlog():
     "/health/liveness",  # Kubernetes has "liveness" probes (https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command)
     tags=["health"],
 )
-async def health_liveliness():
+async def health_liveliness(response: Response):
     """
-    Unprotected endpoint for checking if worker is alive
+    Unprotected endpoint for checking if worker is alive.
+
+    Returns 503 once graceful shutdown has begun so Kubernetes stops counting
+    the draining pod as live and terminates it on schedule.
     """
+    if GracefulShutdownManager.is_shutting_down():
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "shutting_down"}
     return "I'm alive!"
 
 

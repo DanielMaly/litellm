@@ -285,11 +285,25 @@ db:
   deployStandalone: true
 
 # Lifecycle hooks for the LiteLLM container
+#
+# Prefer the native /health/drain preStop hook over a fixed `sleep`: it marks
+# the pod NotReady and blocks only until in-flight requests actually finish
+# (bounded by GRACEFUL_SHUTDOWN_TIMEOUT, default 30s), instead of always
+# waiting the worst-case duration. The drain runs once (the preStop hook and
+# the SIGTERM handler share it), so set terminationGracePeriodSeconds a few
+# seconds above GRACEFUL_SHUTDOWN_TIMEOUT to leave room for teardown before
+# SIGKILL.
+#
+# /health/drain is unauthenticated and off by default; enable it with
+# general_settings.enable_drain_endpoint: true only when the health port is
+# reachable solely from inside the cluster, since any caller that reaches it
+# can take the pod out of rotation.
 # Example:
 # lifecycle:
 #   preStop:
-#     exec:
-#       command: ["/bin/sh", "-c", "sleep 10"]
+#     httpGet:
+#       path: /health/drain
+#       port: 4000
 lifecycle: {}
 
 # Settings for Bitnami postgresql chart (if db.deployStandalone is true, ignored
