@@ -136,3 +136,55 @@ async def test_ensure_partitions_issues_create_for_each_period():
     first_sql = client.db.execute_raw.call_args_list[0].args[0]
     assert 'PARTITION OF "LiteLLM_SpendLogs"' in first_sql
     assert "CREATE TABLE IF NOT EXISTS" in first_sql
+
+
+def test_unsupported_interval_raises():
+    with pytest.raises(ValueError):
+        period_start(date(2026, 6, 1), "year")
+    with pytest.raises(ValueError):
+        next_period_start(date(2026, 6, 1), "year")
+
+
+def test_parse_partition_upper_bound_unparseable_to_value_is_none():
+    """A TO(...) value that is not a valid timestamp must not raise; return None."""
+    assert (
+        parse_partition_upper_bound("FOR VALUES FROM ('x') TO ('not-a-date')") is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_ensure_partitions_continues_when_one_create_fails():
+    mgr = SpendLogsPartitionManager(interval="day", precreate_ahead=2)
+    client = MagicMock()
+    client.db.execute_raw = AsyncMock(side_effect=[0, Exception("overlap"), 0])
+
+    created = await mgr.ensure_partitions(client)
+
+    # the failed partition is skipped, the others still created
+    assert len(created) == 2
+    assert client.db.execute_raw.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_drop_partitions_continues_when_one_drop_fails():
+    mgr = SpendLogsPartitionManager()
+    client = MagicMock()
+    client.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "name": "LiteLLM_SpendLogs_p20260601",
+                "bound": "FOR VALUES FROM ('2026-06-01 00:00:00') TO ('2026-06-02 00:00:00')",
+            },
+            {
+                "name": "LiteLLM_SpendLogs_p20260602",
+                "bound": "FOR VALUES FROM ('2026-06-02 00:00:00') TO ('2026-06-03 00:00:00')",
+            },
+        ]
+    )
+    client.db.execute_raw = AsyncMock(side_effect=[Exception("locked"), 0])
+
+    cutoff = datetime(2026, 6, 10, 0, 0, 0, tzinfo=timezone.utc)
+    dropped = await mgr.drop_partitions_older_than(client, cutoff)
+
+    # both were eligible; the first drop failed so only the second is reported
+    assert dropped == ["LiteLLM_SpendLogs_p20260602"]
