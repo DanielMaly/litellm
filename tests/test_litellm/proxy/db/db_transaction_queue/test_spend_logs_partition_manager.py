@@ -86,6 +86,27 @@ async def test_is_partitioned_true_and_false():
 
 
 @pytest.mark.asyncio
+async def test_catalog_queries_are_scoped_to_current_schema():
+    """
+    Both catalog lookups must filter by current_schema(); otherwise a same-named
+    table in another schema can flip is_partitioned or return foreign partitions.
+    """
+    mgr = SpendLogsPartitionManager()
+    client = MagicMock()
+    client.db.query_raw = AsyncMock(return_value=[])
+
+    await mgr.is_partitioned(client)
+    is_partitioned_sql = client.db.query_raw.call_args.args[0]
+    assert "pg_namespace" in is_partitioned_sql
+    assert "current_schema()" in is_partitioned_sql
+
+    await mgr._list_partitions(client)
+    list_sql = client.db.query_raw.call_args.args[0]
+    assert "pg_namespace" in list_sql
+    assert "current_schema()" in list_sql
+
+
+@pytest.mark.asyncio
 async def test_is_partitioned_swallows_errors_and_returns_false():
     """A catalog query failure must not crash cleanup; fall back to non-partitioned."""
     mgr = SpendLogsPartitionManager()

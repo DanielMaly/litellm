@@ -37,8 +37,22 @@ CREATE TABLE "LiteLLM_SpendLogs" (
 ALTER TABLE "LiteLLM_SpendLogs"
     ADD PRIMARY KEY ("request_id", "startTime");
 
+-- Recreate every index Prisma defines on the table. LIKE ... INCLUDING DEFAULTS
+-- INCLUDING GENERATED copies columns and defaults but NOT indexes, so without
+-- these the admin-UI cost-reporting queries that filter by end_user/session_id
+-- fall back to sequential scans. On a partitioned parent these propagate to
+-- every current and future partition automatically.
 CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_startTime_idx"
     ON "LiteLLM_SpendLogs" ("startTime");
+
+CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_startTime_request_id_idx"
+    ON "LiteLLM_SpendLogs" ("startTime", "request_id");
+
+CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_end_user_idx"
+    ON "LiteLLM_SpendLogs" ("end_user");
+
+CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_session_id_idx"
+    ON "LiteLLM_SpendLogs" ("session_id");
 
 -- Safety net: any row whose startTime has no explicit partition lands here so
 -- writes never fail. The cleanup job never drops the DEFAULT partition.

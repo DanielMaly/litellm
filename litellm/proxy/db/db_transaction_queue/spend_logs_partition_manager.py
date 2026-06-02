@@ -118,7 +118,9 @@ class SpendLogsPartitionManager:
                     SELECT 1
                     FROM pg_partitioned_table pt
                     JOIN pg_class c ON c.oid = pt.partrelid
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE c.relname = $1
+                      AND n.nspname = current_schema()
                 ) AS partitioned
                 """,
                 SPEND_LOGS_TABLE,
@@ -133,8 +135,12 @@ class SpendLogsPartitionManager:
         return bool(rows and rows[0].get("partitioned"))
 
     async def ensure_partitions(self, prisma_client) -> List[str]:
-        """Create the current and upcoming partitions if they don't exist yet."""
-        created: List[str] = []
+        """
+        Ensure the current and upcoming partitions exist, returning the names
+        now present. CREATE TABLE IF NOT EXISTS is a no-op for partitions that
+        already exist, so this list is "ensured present", not "newly created".
+        """
+        ensured: List[str] = []
         for name, lower, upper in upcoming_partitions(
             datetime.now(timezone.utc).date(), self.interval, self.precreate_ahead
         ):
@@ -144,12 +150,12 @@ class SpendLogsPartitionManager:
                     f'PARTITION OF "{SPEND_LOGS_TABLE}" '
                     f"FOR VALUES FROM ('{lower.isoformat()}') TO ('{upper.isoformat()}')"
                 )
-                created.append(name)
+                ensured.append(name)
             except Exception as e:
                 verbose_proxy_logger.warning(
                     "Failed to ensure spend-log partition %s: %s", name, e
                 )
-        return created
+        return ensured
 
     async def _list_partitions(
         self, prisma_client
@@ -161,7 +167,9 @@ class SpendLogsPartitionManager:
             FROM pg_inherits i
             JOIN pg_class c ON c.oid = i.inhrelid
             JOIN pg_class p ON p.oid = i.inhparent
+            JOIN pg_namespace n ON n.oid = p.relnamespace
             WHERE p.relname = $1
+              AND n.nspname = current_schema()
             """,
             SPEND_LOGS_TABLE,
         )
