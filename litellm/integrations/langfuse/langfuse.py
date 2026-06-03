@@ -736,6 +736,7 @@ class LangFuseLogger:
             generation_id = None
             usage = None
             usage_details = None
+            cost_details = None
             if response_obj is not None:
                 usage_response_obj = self._get_responses_api_response(response_obj)
                 if usage_response_obj is None:
@@ -779,6 +780,10 @@ class LangFuseLogger:
                         cache_creation_input_tokens=cache_creation_input_tokens,
                         cache_read_input_tokens=cache_read_input_tokens,
                     )
+                    if isinstance(cost, (int, float)):
+                        cost_details = {
+                            "total": float(cost),
+                        }
 
             generation_name = clean_metadata.pop("generation_name", None)
             if generation_name is None:
@@ -812,6 +817,7 @@ class LangFuseLogger:
                 "output": output if not mask_output else "redacted-by-litellm",
                 "usage": usage,
                 "usage_details": usage_details,
+                "cost_details": cost_details,
                 "metadata": {
                     **log_requester_metadata(redact_user_api_key_info(metadata=allowlisted_metadata)),
                     **enrichments,
