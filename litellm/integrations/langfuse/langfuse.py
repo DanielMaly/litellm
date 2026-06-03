@@ -828,6 +828,7 @@ class LangFuseLogger:
             generation_id = None
             usage = None
             usage_details = None
+            cost_details = None
             if response_obj is not None:
                 usage_response_obj = self._get_responses_api_response(response_obj)
                 if usage_response_obj is None:
@@ -871,6 +872,10 @@ class LangFuseLogger:
                         cache_creation_input_tokens=cache_creation_input_tokens,
                         cache_read_input_tokens=cache_read_input_tokens,
                     )
+                    if isinstance(cost, (int, float)):
+                        cost_details = {
+                            "total": float(cost),
+                        }
 
             requested_generation_name: Final = clean_metadata.pop("generation_name", None)
             _user_api_key_alias: Final = cast(str | None, clean_metadata.get("user_api_key_alias", None))
@@ -898,7 +903,7 @@ class LangFuseLogger:
                 "id": clean_metadata.pop("generation_id", generation_id),
                 "input": masked_input if not mask_input else "redacted-by-litellm",
                 "output": masked_output if not mask_output else "redacted-by-litellm",
-                "cost_details": {"total": cost} if usage is not None and isinstance(cost, (int, float)) else None,
+                "cost_details": cost_details,
                 "metadata": {
                     **log_requester_metadata(redact_user_api_key_info(metadata=allowlisted_metadata)),  # pyright: ignore[reportArgumentType]  # TypedDict in, plain metadata dict out
                     **enrichments,
