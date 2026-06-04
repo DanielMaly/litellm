@@ -68,36 +68,32 @@ class _UsageObject(Protocol):
     def get(self, key: Literal["cache_creation_input_tokens", "cache_read_input_tokens"], /) -> int | None: ...
 
 
+def _get_attr_or_key(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _get_numeric_attr_or_key(obj: Any, keys: Tuple[str, ...], default: int = 0) -> int:
+    for key in keys:
+        value = _get_attr_or_key(obj, key)
+        if isinstance(value, (int, float)):
+            return int(value)
+    return default
+
+
 def _extract_cache_read_input_tokens(usage_obj) -> int:
-    """
-    Extract cache_read_input_tokens from usage object.
-
-    Checks both:
-    1. Top-level cache_read_input_tokens (Anthropic format)
-    2. input_tokens_details.cached_tokens (OpenAI Responses API format)
-    3. prompt_tokens_details.cached_tokens (Gemini, OpenAI chat format)
-
-    See: https://github.com/BerriAI/litellm/issues/18520
-
-    Args:
-        usage_obj: Usage object from LLM response
-
-    Returns:
-        int: Number of cached tokens read, defaults to 0
-    """
-    cache_read_input_tokens = usage_obj.get("cache_read_input_tokens") or 0
+    cache_read_input_tokens = _get_numeric_attr_or_key(
+        usage_obj, ("cache_read_input_tokens",)
+    )
 
     for details_attr in ("input_tokens_details", "prompt_tokens_details"):
-        token_details = getattr(usage_obj, details_attr, None)
+        token_details = _get_attr_or_key(usage_obj, details_attr)
         if token_details is None:
             continue
-        cached_tokens = getattr(token_details, "cached_tokens", None)
-        if (
-            cached_tokens is not None
-            and isinstance(cached_tokens, (int, float))
-            and cached_tokens > 0
-        ):
-            cache_read_input_tokens = cached_tokens
+        cached_tokens = _get_attr_or_key(token_details, "cached_tokens")
+        if isinstance(cached_tokens, (int, float)) and cached_tokens > 0:
+            cache_read_input_tokens = int(cached_tokens)
             break
 
     return cache_read_input_tokens
@@ -752,25 +748,22 @@ class LangFuseLogger:
                 _usage_obj: Final[_UsageObject | None] = getattr(usage_response_obj, "usage", None)
 
                 if _usage_obj:
-                    prompt_tokens = getattr(_usage_obj, "prompt_tokens", None)
-                    if not isinstance(prompt_tokens, (int, float)):
-                        prompt_tokens = getattr(_usage_obj, "input_tokens", None)
-                    if not isinstance(prompt_tokens, (int, float)):
-                        prompt_tokens = 0
-                    else:
-                        prompt_tokens = int(prompt_tokens)
+                    prompt_tokens = _get_numeric_attr_or_key(
+                        _usage_obj, ("prompt_tokens", "input_tokens")
+                    )
+                    completion_tokens = _get_numeric_attr_or_key(
+                        _usage_obj, ("completion_tokens", "output_tokens")
+                    )
+                    total_tokens = _get_numeric_attr_or_key(
+                        _usage_obj, ("total_tokens",)
+                    )
 
-                    completion_tokens = getattr(_usage_obj, "completion_tokens", None)
-                    if not isinstance(completion_tokens, (int, float)):
-                        completion_tokens = getattr(_usage_obj, "output_tokens", None)
-                    if not isinstance(completion_tokens, (int, float)):
-                        completion_tokens = 0
-                    else:
-                        completion_tokens = int(completion_tokens)
-                    total_tokens = getattr(_usage_obj, "total_tokens", None) or 0
-
-                    cache_creation_input_tokens: Final = _usage_obj.get("cache_creation_input_tokens") or 0
-                    cache_read_input_tokens: Final = _extract_cache_read_input_tokens(_usage_obj)
+                    cache_creation_input_tokens = _get_numeric_attr_or_key(
+                        _usage_obj, ("cache_creation_input_tokens",)
+                    )
+                    cache_read_input_tokens = _extract_cache_read_input_tokens(
+                        _usage_obj
+                    )
 
                     usage = {
                         "prompt_tokens": prompt_tokens,
