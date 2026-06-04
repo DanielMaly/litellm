@@ -36,6 +36,10 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.responses.sse_output_recovery import (
+    record_output_item_chunk,
+    record_output_text_chunk,
+)
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import (
@@ -328,6 +332,8 @@ class BaseResponsesAPIStreamingIterator:
         self._completed_response_cache_hit: bool | None = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
+        self._recovered_output_items: Dict[int, Dict[str, Any]] = {}
+        self._recovered_text_only_items: Dict[int, Dict[str, Any]] = {}
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -363,6 +369,33 @@ class BaseResponsesAPIStreamingIterator:
                 llm_provider=self.custom_llm_provider or "",
             )
 
+    def _record_recoverable_output_chunk(self, parsed_chunk: Dict[str, Any]) -> None:
+        event_type = parsed_chunk.get("type")
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            record_output_item_chunk(
+                parsed_chunk=parsed_chunk,
+                output_items=self._recovered_output_items,
+            )
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+            record_output_text_chunk(
+                parsed_chunk=parsed_chunk,
+                output_items=self._recovered_output_items,
+                text_only_items=self._recovered_text_only_items,
+            )
+
+    def _recover_output_on_completed_response(self, response_obj: Any) -> None:
+        existing_output = getattr(response_obj, "output", None)
+        if existing_output:
+            return
+
+        merged_items: Dict[int, Dict[str, Any]] = {**self._recovered_text_only_items}
+        merged_items.update(self._recovered_output_items)
+        if not merged_items:
+            return
+
+        recovered_output = [item for _, item in sorted(merged_items.items())]
+        setattr(response_obj, "output", recovered_output)
+
     def _process_chunk(self, chunk: str) -> ResponsesAPIStreamingResponse | None:
         """Process a single chunk of data from the stream"""
         if not chunk:
@@ -387,6 +420,7 @@ class BaseResponsesAPIStreamingIterator:
 
             # Format as ResponsesAPIStreamingResponse
             if _is_json_object(parsed_chunk):
+                self._record_recoverable_output_chunk(parsed_chunk)
                 if self.responses_api_provider_config is None:
                     raise ValueError("responses_api_provider_config is required to process live streaming chunks")
                 openai_responses_api_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
@@ -488,6 +522,8 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     _response_obj: Final[object] = getattr(openai_responses_api_chunk, "response", None)
+                    if _response_obj is not None:
+                        self._recover_output_on_completed_response(_response_obj)
                     _estimate_wanted: Final[bool] = _chunk_type in (
                         openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                         openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
