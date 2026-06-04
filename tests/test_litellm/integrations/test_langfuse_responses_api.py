@@ -12,11 +12,10 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
 
-import pytest
-
 from litellm.integrations.langfuse.langfuse import (
     LangFuseLogger,
     _extract_cache_read_input_tokens,
+    _get_numeric_attr_or_key,
 )
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
@@ -177,6 +176,42 @@ class TestExtractCacheReadInputTokens:
             input_tokens_details=SimpleNamespace(cached_tokens=30),
         )
         assert _extract_cache_read_input_tokens(usage) == 30
+
+    def test_reads_dict_shaped_token_details(self):
+        usage = {
+            "cache_read_input_tokens": 5,
+            "input_tokens_details": {"cached_tokens": 30},
+            "prompt_tokens_details": {"cached_tokens": 10},
+        }
+        assert _extract_cache_read_input_tokens(usage) == 30
+
+
+class TestNumericAttrOrKey:
+    def test_reads_attribute_field(self):
+        usage = SimpleNamespace(input_tokens=100)
+        assert _get_numeric_attr_or_key(usage, ("prompt_tokens", "input_tokens")) == 100
+
+    def test_reads_dict_field(self):
+        usage = {"prompt_tokens": 101803, "completion_tokens": 247}
+        assert (
+            _get_numeric_attr_or_key(usage, ("prompt_tokens", "input_tokens")) == 101803
+        )
+        assert (
+            _get_numeric_attr_or_key(usage, ("completion_tokens", "output_tokens"))
+            == 247
+        )
+
+    def test_falls_back_to_responses_dict_field(self):
+        usage = {"input_tokens": 100, "output_tokens": 12}
+        assert _get_numeric_attr_or_key(usage, ("prompt_tokens", "input_tokens")) == 100
+        assert (
+            _get_numeric_attr_or_key(usage, ("completion_tokens", "output_tokens"))
+            == 12
+        )
+
+    def test_rejects_mock_auto_attributes(self):
+        usage = MagicMock()
+        assert _get_numeric_attr_or_key(usage, ("prompt_tokens", "input_tokens")) == 0
 
 
 # ---------------------------------------------------------------------------
