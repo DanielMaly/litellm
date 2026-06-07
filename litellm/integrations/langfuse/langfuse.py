@@ -677,7 +677,21 @@ class LangFuseLogger:
             cost: Final = kwargs.get("response_cost", None)
             verbose_logger.debug("trace: %s", cost)
 
+            clean_metadata["litellm_response_cost"] = cost
             hidden_params: Final = standard_logging_object.get("hidden_params") if standard_logging_object else None
+            if hidden_params:
+                clean_metadata["hidden_params"] = filter_exceptions_from_params(hidden_params)
+
+            # Fallback: when response_cost is None (e.g. responses API bridge
+            # path fails to compute cost), read the cost from the standard
+            # logging payload's hidden_params which correctly handles all
+            # fallback paths (including zero-cost subscription models).
+            # Without this, Langfuse applies its own pricing table and
+            # produces phantom costs for zero-cost routes like Codex.
+            if cost is None and hidden_params:
+                hidden_cost = hidden_params.get("response_cost")
+                if isinstance(hidden_cost, (int, float)):
+                    cost = hidden_cost
 
             if (
                 litellm.langfuse_default_tags is not None
