@@ -7048,9 +7048,38 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
         pass
 
 
+# Maximum length for the response_id component of a logging/observation ID.
+# Object-storage backends (MinIO/S3/XFS) enforce a 255-byte limit on
+# individual path components.  The ``time-<HH-MM-SS-%f>_`` prefix adds ~27
+# chars, so any response_id longer than this threshold is replaced with a
+# deterministic SHA-256 hash prefix to keep the full logging ID comfortably
+# under 255 bytes.  The original ID must be preserved separately (e.g. in
+# Langfuse metadata) for correlation back to LiteLLM.  See GitHub issue #31055.
+LOGGING_ID_MAX_ID_LENGTH = 200
+
+
+def _safe_logging_id_component(response_id: str) -> str:
+    """Return a storage-safe ID component, hashing long IDs deterministically.
+
+    When ``response_id`` exceeds ``LOGGING_ID_MAX_ID_LENGTH``, it is replaced
+    with the first 32 hex characters of its SHA-256 digest.  This keeps the
+    resulting logging/observation ID well under the 255-byte path-component
+    limit imposed by object-storage backends (MinIO/S3/XFS) while remaining
+    deterministic.  The original ID should be preserved separately (e.g. in
+    Langfuse metadata) for correlation back to LiteLLM.
+    """
+    if len(response_id) > LOGGING_ID_MAX_ID_LENGTH:
+        return hashlib.sha256(response_id.encode("utf-8")).hexdigest()[:32]
+    return response_id
+
+
 def get_logging_id(start_time, response_obj):
     try:
-        response_id = "time-" + start_time.strftime("%H-%M-%S-%f") + "_" + response_obj.get("id")
+        raw_id = response_obj.get("id")
+        safe_id = _safe_logging_id_component(raw_id)
+        response_id = (
+            "time-" + start_time.strftime("%H-%M-%S-%f") + "_" + safe_id
+        )
         return response_id
     except Exception:
         return None
