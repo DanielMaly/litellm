@@ -1,5 +1,6 @@
 #### What this does ####
 #    On success, logs events to Langfuse
+import hashlib
 import os
 import traceback
 from collections.abc import Callable, Iterable, Mapping
@@ -760,6 +761,24 @@ class LangFuseLogger:
                     and usage_response_obj.get("id", None) is not None
                 ):
                     generation_id = _logging_id(start_time, usage_response_obj)
+                    # Preserve correlation from Langfuse back to LiteLLM when
+                    # the response ID is too long for object-storage path
+                    # components and was hashed by get_logging_id().
+                    # See GitHub issue #31055.
+                    _original_response_id = usage_response_obj.get("id")
+                    if (
+                        _original_response_id is not None
+                        and len(_original_response_id)
+                        > litellm.utils.LOGGING_ID_MAX_ID_LENGTH
+                    ):
+                        clean_metadata["litellm_response_id"] = (
+                            _original_response_id
+                        )
+                        clean_metadata["litellm_response_id_sha256"] = (
+                            hashlib.sha256(
+                                _original_response_id.encode("utf-8")
+                            ).hexdigest()
+                        )
                 _usage_obj: Final[_UsageObject | None] = getattr(usage_response_obj, "usage", None)
 
                 if _usage_obj:
