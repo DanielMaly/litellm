@@ -96,6 +96,33 @@ def test_openrouter_extra_body_transformation():
     ]
 
 
+def test_openrouter_no_usage_injection_in_transform_request():
+    """
+    Regression test for TypeError: AsyncCompletions.create() got an
+    unexpected keyword argument 'usage'.
+
+    OpenrouterConfig.transform_request() must NOT inject ``usage:
+    {"include": True}`` into the request dict. When the request routes
+    through the OpenAI SDK path, any ``usage`` key in the dict is passed
+    as a keyword argument to ``AsyncCompletions.create()``, which does not
+    accept it and raises ``TypeError``.  OpenRouter returns cost/usage
+    data by default, so the injection is unnecessary.
+
+    Upstream fix: commit 011b8baeff / PR #22774.
+    """
+    config = OpenrouterConfig()
+
+    transformed_request = config.transform_request(
+        model="openrouter/openai/gpt-4o",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "usage" not in transformed_request
+
+
 def test_openrouter_cache_control_flag_removal():
     transformed_request = OpenrouterConfig().transform_request(
         model="openrouter/deepseek/deepseek-chat",
@@ -367,7 +394,7 @@ def test_openrouter_cost_tracking_non_streaming():
     Test OpenRouter cost tracking for non-streaming completions.
 
     Verifies:
-    1. Request includes usage.include=true to get cost data
+    1. Request does NOT inject usage parameter (OpenRouter returns cost data by default)
     2. Response extracts cost from usage.cost and stores in _hidden_params
     """
     from unittest.mock import Mock, patch
@@ -375,7 +402,7 @@ def test_openrouter_cost_tracking_non_streaming():
 
     config = OpenrouterConfig()
 
-    # Test request adds usage parameter
+    # Verify request does NOT add usage parameter — OpenRouter returns cost by default
     transformed_request = config.transform_request(
         model="openrouter/anthropic/claude-sonnet-4.5",
         messages=[{"role": "user", "content": "Hello"}],
@@ -383,8 +410,7 @@ def test_openrouter_cost_tracking_non_streaming():
         litellm_params={},
         headers={},
     )
-    assert "usage" in transformed_request
-    assert transformed_request["usage"] == {"include": True}
+    assert "usage" not in transformed_request
 
     # Test response extracts cost
     mock_response = Mock(spec=httpx.Response)
@@ -455,13 +481,13 @@ def test_openrouter_cost_tracking_streaming():
     Test OpenRouter cost tracking for streaming completions.
 
     Verifies:
-    1. Request includes usage.include=true (same as non-streaming)
+    1. Request does NOT inject usage parameter (OpenRouter returns cost data by default)
     2. Streaming chunks preserve usage/cost data in the final chunk
     3. Cost field is accessible in the usage object
     """
     config = OpenrouterConfig()
 
-    # Test request adds usage parameter for streaming
+    # Verify request does NOT add usage parameter — OpenRouter returns cost by default
     transformed_request = config.transform_request(
         model="openrouter/anthropic/claude-sonnet-4.5",
         messages=[{"role": "user", "content": "Hello"}],
@@ -469,8 +495,7 @@ def test_openrouter_cost_tracking_streaming():
         litellm_params={},
         headers={},
     )
-    assert "usage" in transformed_request
-    assert transformed_request["usage"] == {"include": True}
+    assert "usage" not in transformed_request
 
     # Test streaming chunks preserve cost data
     handler = OpenRouterChatCompletionStreamingHandler(
