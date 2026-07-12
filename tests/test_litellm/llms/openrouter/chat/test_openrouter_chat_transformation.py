@@ -94,11 +94,132 @@ def test_openrouter_extra_body_transformation():
         headers={},
     )
 
-    # https://github.com/BerriAI/litellm/issues/8425, validate its not contained in extra_body still
-    assert transformed_request["provider"]["order"] == ["DeepSeek"]
+    # extra_body keys must stay nested under "extra_body" so the OpenAI SDK
+    # merges them into the request body via its extra_body mechanism instead
+    # of raising TypeError on unexpected top-level kwargs.
+    assert "provider" not in transformed_request, "provider must not leak to top level"
+    assert transformed_request["extra_body"]["provider"]["order"] == ["DeepSeek"]
     assert transformed_request["messages"] == [
         {"role": "user", "content": "Hello, world!"}
     ]
+
+
+def test_openrouter_reasoning_stays_nested_in_extra_body():
+    """
+    Regression test: ``reasoning`` inside ``extra_body`` must remain nested
+    and NOT leak to the top level of the request dict.  The OpenAI SDK's
+    ``create()`` rejects unknown top-level kwargs (e.g. ``reasoning``) with
+    ``TypeError: AsyncCompletions.create() got an unexpected keyword argument
+    'reasoning'``.
+    """
+    config = OpenrouterConfig()
+
+    transformed_request = config.transform_request(
+        model="openrouter/openai/o3-mini",
+        messages=[{"role": "user", "content": "Think carefully."}],
+        optional_params={
+            "extra_body": {"reasoning": {"effort": "high"}},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    # reasoning must be nested inside extra_body, NOT at the top level
+    assert "reasoning" not in transformed_request, (
+        "reasoning must not leak to top level — causes TypeError in OpenAI SDK"
+    )
+    assert transformed_request["extra_body"]["reasoning"] == {"effort": "high"}
+
+
+def test_openrouter_no_top_level_leak_from_extra_body():
+    """
+    Ensure no key from ``extra_body`` appears at the top level of the
+    transformed request.  Any top-level key that the OpenAI SDK does not
+    recognise becomes an unexpected kwarg to ``create()``.
+    """
+    config = OpenrouterConfig()
+
+    extra_body_keys = {
+        "reasoning": {"effort": "high"},
+        "transforms": ["middleout"],
+        "route": "openrouter/auto",
+    }
+
+    transformed_request = config.transform_request(
+        model="openrouter/openai/gpt-4o",
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={"extra_body": extra_body_keys},
+        litellm_params={},
+        headers={},
+    )
+
+    for key in extra_body_keys:
+        assert key not in transformed_request, (
+            f"extra_body key '{key}' leaked to top level"
+        )
+        assert key in transformed_request["extra_body"]
+
+
+def test_openrouter_extra_body_merge_preserves_existing_keys():
+    """
+    When the parent ``transform_request`` already places something in
+    ``extra_body``, the merge must preserve those existing keys while adding
+    new ones from the popped ``extra_body``.
+    """
+    config = OpenrouterConfig()
+
+    # Simulate optional_params where the parent path already set extra_body
+    # with one key, and another key comes through the OpenRouter-specific
+    # extra_body mechanism.
+    transformed_request = config.transform_request(
+        model="openrouter/deepseek/deepseek-chat",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "extra_body": {
+                "provider": {"order": ["DeepSeek"]},
+                "reasoning": {"effort": "high"},
+            },
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    # Both keys should survive inside extra_body
+    assert transformed_request["extra_body"]["provider"]["order"] == ["DeepSeek"]
+    assert transformed_request["extra_body"]["reasoning"] == {"effort": "high"}
+
+
+def test_openrouter_empty_extra_body_remains_valid():
+    """
+    An empty ``extra_body`` must not cause errors and should produce a
+    valid request dict with an empty (or absent) ``extra_body`` key.
+    """
+    config = OpenrouterConfig()
+
+    # No extra_body at all
+    transformed_request = config.transform_request(
+        model="openrouter/openai/gpt-4o",
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert "reasoning" not in transformed_request
+    # extra_body may be present but empty, or absent — either is valid
+    if "extra_body" in transformed_request:
+        assert transformed_request["extra_body"] == {}
+
+    # Explicitly empty extra_body
+    transformed_request = config.transform_request(
+        model="openrouter/openai/gpt-4o",
+        messages=[{"role": "user", "content": "Hi"}],
+        optional_params={"extra_body": {}},
+        litellm_params={},
+        headers={},
+    )
+    assert "reasoning" not in transformed_request
+    if "extra_body" in transformed_request:
+        assert transformed_request["extra_body"] == {}
 
 
 def test_openrouter_no_usage_injection_in_transform_request():
