@@ -156,9 +156,17 @@ class OpenrouterConfig(OpenAIGPTConfig):
         if self._supports_cache_control_in_content(model):
             messages = self._move_cache_control_to_content(messages)
 
-        extra_body: Final = optional_params.pop("extra_body", {})
-        response: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
-        response.update(extra_body)
+        extra_body = optional_params.pop("extra_body", {})
+        response = super().transform_request(model, messages, optional_params, litellm_params, headers)
+        # Merge extra_body into response["extra_body"] instead of flattening
+        # it to the top level. Flattening causes keys like ``reasoning`` to
+        # become unexpected keyword arguments to the OpenAI SDK's
+        # ``create()``, raising ``TypeError``. Keeping them nested lets the
+        # SDK merge ``extra_body`` into the request body correctly.
+        response["extra_body"] = {
+            **(response.get("extra_body") or {}),
+            **extra_body,
+        }
 
         return response
 
