@@ -6,7 +6,7 @@ import traceback
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Tuple, cast
 
 from packaging.version import Version
 
