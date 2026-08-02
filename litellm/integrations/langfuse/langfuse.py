@@ -9,7 +9,7 @@ from datetime import datetime
 from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Tuple, cast, runtime_checkable
 
 from packaging.version import Version
 
