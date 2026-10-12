@@ -10490,6 +10490,22 @@ class Router:
                 )
             shared_model_info["mode"] = existing_shared_mode
 
+        # A capability flag must never travel the shared key in the negative
+        # direction. Aliases share one backend entry — the built-in family entry
+        # this key resolves to — and one deployment's supports_reasoning: False
+        # would veto the capability for every sibling deployment and for the
+        # request-path gates that read the family entry, rejecting reasoning for
+        # a model that supports it. Positive flags still propagate (custom
+        # backends rely on that), and each deployment's own model_id entry keeps
+        # its exact flags. Same no-downgrade spirit as the mode preservation
+        # above.
+        for _shared_flag in [
+            _shared_key
+            for _shared_key, _shared_value in shared_model_info.items()
+            if _shared_key.startswith("supports_") and _shared_value is False
+        ]:
+            shared_model_info.pop(_shared_flag, None)
+
         # Always register the (possibly mode-preserved) shared backend info.
         litellm.register_model(
             model_cost={_key: shared_model_info for _key in backend_keys},
