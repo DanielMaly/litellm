@@ -314,6 +314,109 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
             mock_add_prompt_params.assert_called_once()
 
+    def test_log_langfuse_v2_passes_litellm_response_cost_as_cost_details(self):
+        """
+        When LiteLLM has calculated response_cost, pass it to Langfuse as
+        cost_details so Langfuse records LiteLLM's authoritative cost instead
+        of recalculating from its own model pricing table.
+        """
+        self.use_real_langfuse_client()
+
+        response_obj = MagicMock()
+        response_obj.get.return_value = "cmpl-cost-test"
+        response_obj.usage = MagicMock()
+        response_obj.usage.prompt_tokens = 11
+        response_obj.usage.completion_tokens = 13
+        response_obj.usage.total_tokens = 24
+        response_obj.usage.get.return_value = None
+
+        kwargs = {
+            "model": "openrouter/custom-priced-model",
+            "messages": [{"role": "user", "content": "Test"}],
+            "litellm_params": {"metadata": {}},
+            "optional_params": {},
+            "litellm_call_id": "test-call-id-cost-details",
+            "standard_logging_object": None,
+            "response_cost": 0.00123,
+        }
+        fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ) as mock_add_prompt_params:
+            self.logger._log_langfuse_v2(
+                user_id="test-user",
+                metadata={},
+                litellm_params=kwargs["litellm_params"],
+                output={"role": "assistant", "content": "Response"},
+                start_time=fixed_time,
+                end_time=fixed_time + datetime.timedelta(seconds=1),
+                kwargs=kwargs,
+                optional_params=kwargs["optional_params"],
+                input={"messages": kwargs["messages"]},
+                response_obj=response_obj,
+                level="DEFAULT",
+                litellm_call_id=kwargs["litellm_call_id"],
+            )
+
+        mock_add_prompt_params.assert_called_once()
+        cost_details = json.loads(
+            self.exported_generation().attributes["langfuse.observation.cost_details"]
+        )
+        self.assertEqual(cost_details, {"total": 0.00123})
+
+    def test_log_langfuse_v2_omits_cost_details_when_no_response_cost(self):
+        """
+        When response_cost is absent (None), cost_details must be omitted
+        entirely — Langfuse should fall back to its own model-based pricing.
+        """
+        self.use_real_langfuse_client()
+
+        response_obj = MagicMock()
+        response_obj.get.return_value = "cmpl-no-cost"
+        response_obj.usage = MagicMock()
+        response_obj.usage.prompt_tokens = 5
+        response_obj.usage.completion_tokens = 3
+        response_obj.usage.total_tokens = 8
+        response_obj.usage.get.return_value = None
+
+        kwargs = {
+            "model": "openrouter/custom-priced-model",
+            "messages": [{"role": "user", "content": "Test"}],
+            "litellm_params": {"metadata": {}},
+            "optional_params": {},
+            "litellm_call_id": "test-call-id-no-cost",
+            "standard_logging_object": None,
+            # response_cost deliberately absent
+        }
+        fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ) as mock_add_prompt_params:
+            self.logger._log_langfuse_v2(
+                user_id="test-user",
+                metadata={},
+                litellm_params=kwargs["litellm_params"],
+                output={"role": "assistant", "content": "Response"},
+                start_time=fixed_time,
+                end_time=fixed_time + datetime.timedelta(seconds=1),
+                kwargs=kwargs,
+                optional_params=kwargs["optional_params"],
+                input={"messages": kwargs["messages"]},
+                response_obj=response_obj,
+                level="DEFAULT",
+                litellm_call_id=kwargs["litellm_call_id"],
+            )
+
+        mock_add_prompt_params.assert_called_once()
+        attrs = self.exported_generation().attributes
+        self.assertIsNone(attrs.get("langfuse.observation.cost_details"))
+
     def _build_standard_logging_payload(self, trace_id: Optional[str] = None):
         payload = {
             "id": "payload-id",
